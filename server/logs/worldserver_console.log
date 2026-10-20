@@ -1,0 +1,62 @@
+LegionForge rev. LegionForge 7.3.5.26124 (Win64, Release) (worldserver-daemon)
+<Ctrl-C> to stop.
+
+  _                   _               ______                     
+ | |                 (_)              |  ___|                    
+ | |     ___  __ _ _ _  ___  _ __     | |_ ___  _ __ __ _  ___   
+ | |    / _ \/ _` | | |/ _ \| '_ \    |  _/ _ \| '__/ _` |/ _ \  
+ | |___|  __/ (_| | | | (_) | | | |   | || (_) | | | (_| |  __/  
+ \_____/\___|\__, |_|_|\___/|_| |_|   \_| \___/|_|  \__, |\___|  
+              __/ |                                  __/ |       
+             |___/                                  |___/        
+
+        ( L E G I O N F O R G E   P R O J E C T )
+        World of Warcraft Legion 7.3.5 - client build 26124
+        Build date: 2026-10-20
+
+Using configuration file worldserver.conf.
+Using SSL version: OpenSSL 3.5.9 29 Sep 2026 (library: OpenSSL 3.5.9 29 Sep 2026)
+Using Boost version: 1.83.0
+Process priority class set to HIGH
+MySQL client library: 8.0.46
+MySQL server ver: 8.0.46 
+Connected to MySQL database at 127.0.0.1
+MySQL client library: 8.0.46
+MySQL server ver: 8.0.46 
+Connected to MySQL database at 127.0.0.1
+MySQL client library: 8.0.46
+MySQL server ver: 8.0.46 
+Connected to MySQL database at 127.0.0.1
+MySQL client library: 8.0.46
+MySQL server ver: 8.0.46 
+Connected to MySQL database at 127.0.0.1
+MySQL client library: 8.0.46
+MySQL server ver: 8.0.46 
+Connected to MySQL database at 127.0.0.1
+MySQL client library: 8.0.46
+MySQL server ver: 8.0.46 
+Connected to MySQL database at 127.0.0.1
+MySQL client library: 8.0.46
+MySQL server ver: 8.0.46 
+Connected to MySQL database at 127.0.0.1
+MySQL client library: 8.0.46
+MySQL server ver: 8.0.46 
+Connected to MySQL database at 127.0.0.1
+MySQL client library: 8.0.46
+MySQL server ver: 8.0.46 
+Connected to MySQL database at 127.0.0.1
+Realm running as realm ID 1
+Using World DB: NORDRASSILDB v.1
+Will clear `logs` table of entries older than 1209600 seconds every 10 minutes.
+Using DataDir ./data/
+WORLD: MMap data directory is: ./data/mmaps
+VMap support included. LineOfSight:1, getHeight:1, indoorCheck:1 PetLOS:1
+VMap data directory is: ./data/vmaps
+Loading anticheat library
+Loading table 'cheat_sanctions'
+>> 30 anticheat checks loaded
+---INITIALIZE ANTICHEAT SYSTEM---
+Load anticheat data...
+Loading Trinity strings...
+>> Loaded 1307 Trinity strings from table trinity_string in 123 ms
+Loading db2 info...

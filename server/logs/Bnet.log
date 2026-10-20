@@ -1,0 +1,37 @@
+LegionForge rev. LegionForge 7.3.5.26124 (Win64, Release) (bnetserver)
+<Ctrl-C> to stop.
+
+  _                   _               ______                     
+ | |                 (_)              |  ___|                    
+ | |     ___  __ _ _ _  ___  _ __     | |_ ___  _ __ __ _  ___   
+ | |    / _ \/ _` | | |/ _ \| '_ \    |  _/ _ \| '__/ _` |/ _ \  
+ | |___|  __/ (_| | | | (_) | | | |   | || (_) | | | (_| |  __/  
+ \_____/\___|\__, |_|_|\___/|_| |_|   \_| \___/|_|  \__, |\___|  
+              __/ |                                  __/ |       
+             |___/                                  |___/        
+
+        ( L E G I O N F O R G E   P R O J E C T )
+        World of Warcraft Legion 7.3.5 - client build 26124
+        Build date: 2026-10-20
+
+Using configuration file bnetserver.conf.
+Using SSL version: OpenSSL 3.5.9 29 Sep 2026 (library: OpenSSL 3.5.9 29 Sep 2026)
+Using Boost version: 1.83.0
+Opening DatabasePool 'auth'. Asynchronous connections: 1, synchronous connections: 1.
+MySQL client library: 8.0.46
+MySQL server ver: 8.0.46 
+Connected to MySQL database at 127.0.0.1
+MySQL client library: 8.0.46
+MySQL server ver: 8.0.46 
+Connected to MySQL database at 127.0.0.1
+DatabasePool 'auth' opened successfully. 2 total connections running.
+Started auth database connection pool.
+REST Login service bound to http://0.0.0.0:8081
+Added realm "LegionForge" at 127.0.0.1:8085.
+LegionForge rev. LegionForge 7.3.5.26124 (Win64, Release) (bnetserver-daemon) ready...
+SQL(p): SELECT id, name, address, localAddress, localSubnetMask, port, icon, flag, timezone, allowedSecurityLevel, population, gamebuild, Region, Battlegroup FROM realmlist WHERE flag <> 3 ORDER BY name
+ [ERROR]: [2013] Lost connection to MySQL server during query
+Could not connect to MySQL database at 127.0.0.1: Can't connect to MySQL server on '127.0.0.1:3306' (10061)
+
+Unhandled MySQL errno 0. Unexpected behaviour possible.
+Removed realm "LegionForge".

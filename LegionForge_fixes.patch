@@ -1,0 +1,395 @@
+diff --git a/core/src/common/Logging/Log.cpp b/core/src/common/Logging/Log.cpp
+index 51cd411..2df42b0 100644
+--- a/core/src/common/Logging/Log.cpp
++++ b/core/src/common/Logging/Log.cpp
+@@ -31,6 +31,9 @@
+ #include "Duration.h"
+ 
+ #include <boost/asio/post.hpp>
++#include <boost/filesystem/operations.hpp>
++#include <boost/filesystem/path.hpp>
++#include <boost/system/error_code.hpp>
+ 
+ #include <cstdarg>
+ #include <sstream>
+@@ -489,7 +492,28 @@ void Log::LoadFromConfig()
+     AppenderId = 0;
+     lowestLogLevel = LOG_LEVEL_FATAL;
+ 
+-    m_logsDir = sConfigMgr->GetStringDefault("LogsDir", "");
++    // LegionForge fix: log files must be written into the dedicated logs directory (server\\logs),
++    // not next to worldserver.exe. Default to "logs" and create the directory when it is missing,
++    // otherwise every file appender silently fails and no log is written at all.
++    m_logsDir = sConfigMgr->GetStringDefault("LogsDir", "logs");
++    if (m_logsDir.empty())
++        m_logsDir = "logs";
++
++    {
++        boost::system::error_code dirError;
++        boost::filesystem::path logsPath(m_logsDir);
++        if (!boost::filesystem::exists(logsPath, dirError))
++        {
++            boost::filesystem::create_directories(logsPath, dirError);
++            if (dirError)
++                fprintf(stderr, "Log: could not create logs directory '%s' (%s), logging to the current directory instead.\n",
++                    m_logsDir.c_str(), dirError.message().c_str());
++        }
++
++        if (dirError)
++            m_logsDir.clear();
++    }
++
+     if (!m_logsDir.empty() && (m_logsDir.at(m_logsDir.length() - 1) != '/') && (m_logsDir.at(m_logsDir.length() - 1) != '\\'))
+         m_logsDir.push_back('/');
+ 
+diff --git a/core/src/server/bnetserver/bnetserver.conf.dist b/core/src/server/bnetserver/bnetserver.conf.dist
+index 7faafd3..3d25daf 100644
+--- a/core/src/server/bnetserver/bnetserver.conf.dist
++++ b/core/src/server/bnetserver/bnetserver.conf.dist
+@@ -52,9 +52,10 @@ Game.Build.Version = 26124
+ #        Description: Logs directory setting.
+ #        Important:   LogsDir needs to be quoted, as the string might contain space characters.
+ #                     Logs directory must exists, or log file creation will be disabled.
+-#        Default:     "" - (Log files will be stored in the current path)
++#        Default:     "logs" - (log files are stored in the "logs" sub directory,
++#                     the directory is created automatically on startup)
+ 
+-LogsDir = "Logs"
++LogsDir = "logs"
+ 
+ #
+ #    MaxPingTime
+diff --git a/core/src/server/game/Battlegrounds/BattlegroundDefines.h b/core/src/server/game/Battlegrounds/BattlegroundDefines.h
+index ea025f3..08b328f 100644
+--- a/core/src/server/game/Battlegrounds/BattlegroundDefines.h
++++ b/core/src/server/game/Battlegrounds/BattlegroundDefines.h
+@@ -9,7 +9,11 @@ namespace MS
+         static uint8 const CountOfPlayersToAverageWaitTime = 10;
+         static uint8 const MaxArenaSlot = 2;
+         static uint8 const BracketSlots = 4;
+-        static uint8 const MaxBrackets = 12;
++        // LegionForge fix: the custom 7.3.5.26124 client ships merged BfA/Shadowlands/Dragonflight db2 data,
++        // PvpDifficulty.db2 of those builds contains more than 12 level brackets (RangeIndex up to 15+).
++        // The value below must stay >= the highest RangeIndex found in PvpDifficulty.db2 + 1.
++        // Records above this limit are ignored at runtime instead of crashing the server (see DB2Stores.cpp).
++        static uint8 const MaxBrackets = 24;
+ 
+         static TeamId GetTeamIdByTeam(uint32 team) { return team == ALLIANCE ? TEAM_ALLIANCE : TEAM_HORDE; }
+         static Team GetTeamByTeamId(TeamId teamID) { return teamID == TEAM_ALLIANCE ? ALLIANCE : HORDE; }
+diff --git a/core/src/server/game/Battlegrounds/BattlegroundQueue.cpp b/core/src/server/game/Battlegrounds/BattlegroundQueue.cpp
+index 748c14d..f7498cf 100644
+--- a/core/src/server/game/Battlegrounds/BattlegroundQueue.cpp
++++ b/core/src/server/game/Battlegrounds/BattlegroundQueue.cpp
+@@ -348,7 +348,8 @@ void BattlegroundQueue::RemovePlayerQueue(ObjectGuid guid, bool decreaseInvitedC
+     std::list<GroupQueueInfo*>::iterator group_itr;
+     uint32 index = MS::Battlegrounds::GetTeamIdByTeam(group->Team);
+ 
+-    for (uint8 bracket_id_tmp = MS::Battlegrounds::MaxBrackets - 1; bracket_id_tmp >= 0 && bracketID == -1; --bracket_id_tmp)
++    // LegionForge fix: an uint8 counter never becomes < 0, the loop wrapped around and read out of bounds.
++    for (int32 bracket_id_tmp = int32(MS::Battlegrounds::MaxBrackets) - 1; bracket_id_tmp >= 0 && bracketID == -1; --bracket_id_tmp)
+     {
+         for (uint32 j = index; j < MS::Battlegrounds::QueueGroupTypes::Max; j += MAX_TEAMS)
+         {
+diff --git a/core/src/server/game/DataStores/DB2Stores.cpp b/core/src/server/game/DataStores/DB2Stores.cpp
+index baf3530..0e22688 100644
+--- a/core/src/server/game/DataStores/DB2Stores.cpp
++++ b/core/src/server/game/DataStores/DB2Stores.cpp
+@@ -1649,10 +1649,15 @@ void DB2Manager::LoadStores(std::string const& dataPath, uint32 defaultLocale)
+ 
+ void DB2Manager::InitDB2CustomStores()
+ {
+-    ASSERT(BATTLE_PET_SPECIES_MAX_ID >= sBattlePetSpeciesStore.GetNumRows(),
+-        "BATTLE_PET_SPECIES_MAX_ID (%d) must be equal to or greater than %u", BATTLE_PET_SPECIES_MAX_ID, sBattlePetSpeciesStore.GetNumRows());
++    // LegionForge fix: the custom client ships db2 files merged from newer expansions, therefore those
++    // sanity checks must only warn - a hard ASSERT here kills the server before the world is even loaded.
++    if (BATTLE_PET_SPECIES_MAX_ID < sBattlePetSpeciesStore.GetNumRows())
++        TC_LOG_ERROR(LOG_FILTER_GENERAL, "BattlePetSpecies.db2 has %u rows while BATTLE_PET_SPECIES_MAX_ID is %u - raise it in DBCEnums.h.",
++            sBattlePetSpeciesStore.GetNumRows(), uint32(BATTLE_PET_SPECIES_MAX_ID));
+ 
+-    ASSERT(PVP_SCALING_EFFECT_MAX >= sPvpScalingEffectTypeStore.GetNumRows(), "In PvpScalingEffectTypes.db2 exist new rows %u", sPvpScalingEffectTypeStore.GetNumRows());
++    if (PVP_SCALING_EFFECT_MAX < sPvpScalingEffectTypeStore.GetNumRows())
++        TC_LOG_ERROR(LOG_FILTER_GENERAL, "PvpScalingEffectTypes.db2 has %u rows while PVP_SCALING_EFFECT_MAX is %u - new rows are ignored.",
++            sPvpScalingEffectTypeStore.GetNumRows(), uint32(PVP_SCALING_EFFECT_MAX));
+ 
+     for (AreaTableEntry const* area : sAreaTableStore)
+         _areaEntry.insert(std::make_pair(area->ID, area));
+@@ -1877,9 +1882,12 @@ void DB2Manager::InitDB2CustomStores()
+ 
+     for (NamesProfanityEntry const* namesProfanity : sNamesProfanityStore)
+     {
+-        ASSERT(namesProfanity->Language < MAX_LOCALES || namesProfanity->Language == -1);
++        if (namesProfanity->Language >= MAX_LOCALES && namesProfanity->Language != -1)
++            continue;
++
+         std::wstring name;
+-        ASSERT(Utf8toWStr(namesProfanity->Name, name));
++        if (!Utf8toWStr(namesProfanity->Name, name))
++            continue;
+         if (namesProfanity->Language != -1)
+             _nameValidators[namesProfanity->Language].emplace_back(name, boost::regex::icase | boost::regex::optimize);
+         else
+@@ -1897,15 +1905,17 @@ void DB2Manager::InitDB2CustomStores()
+     for (NamesReservedEntry const* namesReserved : sNamesReservedStore)
+     {
+         std::wstring name;
+-        ASSERT(Utf8toWStr(namesReserved->Name, name));
++        if (!Utf8toWStr(namesReserved->Name, name))
++            continue;
++
+         _nameValidators[MAX_LOCALES].emplace_back(name, boost::regex::icase | boost::regex::optimize);
+     }
+ 
+     for (NamesReservedLocaleEntry const* namesReserved : sNamesReservedLocaleStore)
+     {
+-        ASSERT(!(namesReserved->LocaleMask & ~((1 << MAX_LOCALES) - 1)));
+         std::wstring name;
+-        ASSERT(Utf8toWStr(namesReserved->Name, name));
++        if (!Utf8toWStr(namesReserved->Name, name))
++            continue;
+         for (uint32 i = 0; i < MAX_LOCALES; ++i)
+         {
+             if (i == LOCALE_none)
+@@ -1960,13 +1970,24 @@ void DB2Manager::InitDB2CustomStores()
+     _spellEffectDiff.resize(sSpellEffectStore.GetNumRows() + 1);
+     _spellEffectMap.resize(sSpellEffectStore.GetNumRows() + 1);
+ 
++    uint32 skippedSpellEffects = 0;
+     for (SpellEffectEntry const* spellEffect : sSpellEffectStore)
+     {
+-        ASSERT(spellEffect->EffectIndex < MAX_SPELL_EFFECTS, "MAX_SPELL_EFFECTS must be at least %u", spellEffect->EffectIndex + 1);
+-        ASSERT(spellEffect->Effect < TOTAL_SPELL_EFFECTS, "TOTAL_SPELL_EFFECTS must be at least %u", spellEffect->Effect + 1);
+-        ASSERT(spellEffect->EffectAura < TOTAL_AURAS, "TOTAL_AURAS must be at least %u", spellEffect->EffectAura + 1);
+-        ASSERT(spellEffect->ImplicitTarget[0] < TOTAL_SPELL_TARGETS, "TOTAL_SPELL_TARGETS must be at least %u", spellEffect->ImplicitTarget[0] + 1);
+-        ASSERT(spellEffect->ImplicitTarget[1] < TOTAL_SPELL_TARGETS, "TOTAL_SPELL_TARGETS must be at least %u", spellEffect->ImplicitTarget[1] + 1);
++        // LegionForge fix: SpellEffect.db2 of the custom client contains effects/auras/targets introduced
++        // after Legion. Skip them instead of asserting, otherwise the core cannot start at all.
++        if (spellEffect->EffectIndex >= MAX_SPELL_EFFECTS || spellEffect->Effect >= TOTAL_SPELL_EFFECTS ||
++            spellEffect->EffectAura >= TOTAL_AURAS ||
++            spellEffect->ImplicitTarget[0] >= TOTAL_SPELL_TARGETS || spellEffect->ImplicitTarget[1] >= TOTAL_SPELL_TARGETS)
++        {
++            ++skippedSpellEffects;
++            continue;
++        }
++
++        if (spellEffect->SpellID >= _spellEffectDiff.size())
++        {
++            _spellEffectDiff.resize(spellEffect->SpellID + 1);
++            _spellEffectMap.resize(spellEffect->SpellID + 1);
++        }
+ 
+         if (spellEffect->DifficultyID)
+             _spellEffectDiff[spellEffect->SpellID].effects[MAKE_PAIR16(spellEffect->EffectIndex, spellEffect->DifficultyID)] = spellEffect;
+@@ -1980,16 +2001,26 @@ void DB2Manager::InitDB2CustomStores()
+             _reversTriggerSpellList[spellEffect->EffectTriggerSpell] = spellEffect->SpellID;
+     }
+ 
++    if (skippedSpellEffects)
++        TC_LOG_ERROR(LOG_FILTER_GENERAL, "SpellEffect.db2: %u record(s) use effect/aura/target values unknown to this core and were skipped.", skippedSpellEffects);
++
+     memset(_chrSpecializationByIndex, 0, sizeof _chrSpecializationByIndex);
+     for (ChrSpecializationEntry const* chrSpec : sChrSpecializationStore)
+     {
+-        ASSERT(chrSpec->ClassID < MAX_CLASSES);
+-        ASSERT(chrSpec->OrderIndex < MAX_SPECIALIZATIONS);
++        // LegionForge fix: tolerate specialization rows of newer expansions.
++        if (chrSpec->ClassID >= MAX_CLASSES || chrSpec->OrderIndex >= MAX_SPECIALIZATIONS)
++        {
++            TC_LOG_ERROR(LOG_FILTER_GENERAL, "ChrSpecialization.db2: skipped record %u (ClassID %u, OrderIndex %u).",
++                uint32(chrSpec->ID), uint32(chrSpec->ClassID), uint32(chrSpec->OrderIndex));
++            continue;
++        }
+ 
+         uint32 storageIndex = chrSpec->ClassID;
+         if (chrSpec->Flags & CHR_SPECIALIZATION_FLAG_PET_OVERRIDE_SPEC)
+         {
+-            ASSERT(!chrSpec->ClassID);
++            if (chrSpec->ClassID)
++                continue;
++
+             storageIndex = PET_SPEC_OVERRIDE_CLASS_INDEX;
+         }
+ 
+@@ -1998,10 +2029,25 @@ void DB2Manager::InitDB2CustomStores()
+             _defaultChrSpecializationsByClass[chrSpec->ClassID] = chrSpec;
+     }
+ 
+-    for (PVPDifficultyEntry const* entry : sPvpDifficultyStore)
++    // LegionForge fix: never crash on "Need update MS::Battlegrounds::MaxBrackets by db2 data".
++    // The custom client data (BfA/Shadowlands/Dragonflight db2 mix) may declare more pvp level brackets
++    // than the core supports. Such records are reported once and then ignored by every bracket lookup.
+     {
+-        if (entry->RangeIndex >= MS::Battlegrounds::MaxBrackets)
+-            ASSERT(false && "Need update MS::Battlegrounds::MaxBrackets by db2 data");
++        uint32 outOfRangeBrackets = 0;
++        uint32 highestRangeIndex = 0;
++        for (PVPDifficultyEntry const* entry : sPvpDifficultyStore)
++        {
++            if (uint32(entry->RangeIndex) > highestRangeIndex)
++                highestRangeIndex = uint32(entry->RangeIndex);
++
++            if (entry->RangeIndex >= MS::Battlegrounds::MaxBrackets)
++                ++outOfRangeBrackets;
++        }
++
++        if (outOfRangeBrackets)
++            TC_LOG_ERROR(LOG_FILTER_GENERAL, "PvpDifficulty.db2: %u record(s) use RangeIndex >= MS::Battlegrounds::MaxBrackets (limit %u, highest found %u). "
++                "Those brackets are ignored. Raise MS::Battlegrounds::MaxBrackets in BattlegroundDefines.h if you need them.",
++                outOfRangeBrackets, uint32(MS::Battlegrounds::MaxBrackets), highestRangeIndex);
+     }
+ 
+     {
+@@ -2020,7 +2066,10 @@ void DB2Manager::InitDB2CustomStores()
+                 if (_powersByClass[power->ClassID][j] != MAX_POWERS)
+                     ++index;
+ 
+-            ASSERT(power->PowerType < MAX_POWERS);
++            // LegionForge fix: ignore power types / classes unknown to this core instead of crashing.
++            if (power->PowerType >= MAX_POWERS || power->ClassID >= MAX_CLASSES)
++                continue;
++
+             _powersByClass[power->ClassID][power->PowerType] = index;
+         }
+     }
+@@ -2075,8 +2124,10 @@ void DB2Manager::InitDB2CustomStores()
+     std::array<CharBaseSectionVariation, SECTION_TYPE_MAX> sectionToBase = { {} };
+     for (auto charBaseSection : sCharBaseSectionStore)
+     {
+-        ASSERT(charBaseSection->ResolutionVariationEnum < SECTION_TYPE_MAX, "SECTION_TYPE_MAX (%d) must be equal to or greater than %u", uint32(SECTION_TYPE_MAX), uint32(charBaseSection->ResolutionVariationEnum + 1));
+-        ASSERT(charBaseSection->VariationEnum < AsUnderlyingType(CharBaseSectionVariation::Count), "CharBaseSectionVariation::Count %u must be equal to or greater than %u", uint32(CharBaseSectionVariation::Count), uint32(charBaseSection->VariationEnum + 1));
++        // LegionForge fix: skip unsupported char section variations coming from newer client data.
++        if (charBaseSection->ResolutionVariationEnum >= SECTION_TYPE_MAX ||
++            charBaseSection->VariationEnum >= AsUnderlyingType(CharBaseSectionVariation::Count))
++            continue;
+ 
+         sectionToBase[charBaseSection->ResolutionVariationEnum] = static_cast<CharBaseSectionVariation>(charBaseSection->VariationEnum);
+     }
+@@ -2084,7 +2135,8 @@ void DB2Manager::InitDB2CustomStores()
+     std::map<std::tuple<uint8, uint8, CharBaseSectionVariation>, std::set<std::pair<uint8, uint8>>> addedSections;
+     for (auto charSection : sCharSectionsStore)
+     {
+-        ASSERT(charSection->BaseSection < SECTION_TYPE_MAX, "SECTION_TYPE_MAX (%d) must be equal to or greater than %u", AsUnderlyingType(SECTION_TYPE_MAX), uint32(charSection->BaseSection + 1));
++        if (charSection->BaseSection >= SECTION_TYPE_MAX)
++            continue;
+ 
+         std::tuple<uint8, uint8, CharBaseSectionVariation> sectionKey{ charSection->RaceID, charSection->SexID, sectionToBase[charSection->BaseSection] };
+         std::pair<uint8, uint8> sectionCombination{ charSection->VariationIndex, charSection->ColorIndex };
+@@ -2143,15 +2195,23 @@ void DB2Manager::InitDB2CustomStores()
+ 
+     for (ItemChildEquipmentEntry const* itemChildEquipment : sItemChildEquipmentStore)
+     {
+-        ASSERT(_itemChildEquipment.find(itemChildEquipment->ItemID) == _itemChildEquipment.end(), "Item must have max 1 child item.");
++        // LegionForge fix: duplicated rows in the custom ItemChildEquipment.db2 must not crash the server.
++        if (_itemChildEquipment.find(itemChildEquipment->ItemID) != _itemChildEquipment.end())
++            continue;
++
+         _itemChildEquipment[itemChildEquipment->ItemID] = itemChildEquipment;
+         _isChildItem[itemChildEquipment->ChildItemID] = true;
+     }
+ 
+     for (ItemClassEntry const* itemClass : sItemClassStore)
+     {
+-        ASSERT(itemClass->OldEnumValue < _itemClassByOldEnum.size());
+-        ASSERT(!_itemClassByOldEnum[itemClass->OldEnumValue]);
++        // LegionForge fix: tolerate unknown / duplicated item classes from merged client data.
++        if (uint32(itemClass->OldEnumValue) >= _itemClassByOldEnum.size())
++            continue;
++
++        if (_itemClassByOldEnum[itemClass->OldEnumValue])
++            continue;
++
+         _itemClassByOldEnum[itemClass->OldEnumValue] = itemClass;
+     }
+ 
+@@ -3334,6 +3394,11 @@ PVPDifficultyEntry const* DB2Manager::GetBattlegroundBracketByLevel(uint32 mapID
+     PVPDifficultyEntry const* maxEntry = nullptr;
+     for (PVPDifficultyEntry const* entry : sPvpDifficultyStore)
+     {
++        // LegionForge fix: brackets that the core cannot store must never be returned,
++        // otherwise RangeIndex would be used as an index into MaxBrackets sized arrays.
++        if (entry->RangeIndex >= MS::Battlegrounds::MaxBrackets)
++            continue;
++
+         if (entry->MapID != mapID || entry->MinLevel > level)
+             continue;
+ 
+@@ -3349,6 +3414,9 @@ PVPDifficultyEntry const* DB2Manager::GetBattlegroundBracketByLevel(uint32 mapID
+ 
+ PVPDifficultyEntry const* DB2Manager::GetBattlegroundBracketById(uint32 mapID, uint8 id)
+ {
++    if (id >= MS::Battlegrounds::MaxBrackets)
++        return nullptr;
++
+     for (PVPDifficultyEntry const* entry : sPvpDifficultyStore)
+         if (entry->MapID == mapID && entry->RangeIndex == id)
+             return entry;
+diff --git a/core/src/server/game/Server/Protocol/PacketLog.cpp b/core/src/server/game/Server/Protocol/PacketLog.cpp
+index 981f288..0929d49 100644
+--- a/core/src/server/game/Server/Protocol/PacketLog.cpp
++++ b/core/src/server/game/Server/Protocol/PacketLog.cpp
+@@ -84,7 +84,7 @@ PacketLog* PacketLog::instance()
+ 
+ void PacketLog::Initialize()
+ {
+-    std::string logsDir = sConfigMgr->GetStringDefault("LogsDir", "");
++    std::string logsDir = sConfigMgr->GetStringDefault("LogsDir", "logs");
+ 
+     if (!logsDir.empty())
+         if ((logsDir[logsDir.length() - 1] != '/') && (logsDir[logsDir.length() - 1] != '\\'))
+diff --git a/core/src/server/worldserver/worldserver.conf.dist b/core/src/server/worldserver/worldserver.conf.dist
+index c7c1e11..645d0a1 100644
+--- a/core/src/server/worldserver/worldserver.conf.dist
++++ b/core/src/server/worldserver/worldserver.conf.dist
+@@ -94,9 +94,10 @@ DataDir = ""
+ #        Description: Logs directory setting.
+ #        Important:   LogsDir needs to be quoted, as the string might contain space characters.
+ #                     Logs directory must exists, or log file creation will be disabled.
+-#        Default:     "" - (Log files will be stored in the current path)
++#        Default:     "logs" - (log files are stored in the "logs" sub directory,
++#                     the directory is created automatically on startup)
+ 
+-LogsDir = ""
++LogsDir = "logs"
+ 
+ #
+ #    LoginDatabaseInfo
+diff --git a/server/bnetserver.conf b/server/bnetserver.conf
+index ee643f5..78ffeb9 100644
+--- a/server/bnetserver.conf
++++ b/server/bnetserver.conf
+@@ -52,9 +52,10 @@ Game.Build.Version = 26124
+ #        Description: Logs directory setting.
+ #        Important:   LogsDir needs to be quoted, as the string might contain space characters.
+ #                     Logs directory must exists, or log file creation will be disabled.
+-#        Default:     "" - (Log files will be stored in the current path)
++#        Default:     "logs" - (log files are stored in the "logs" sub directory,
++#                     the directory is created automatically on startup)
+ 
+-LogsDir = "Logs"
++LogsDir = "logs"
+ 
+ #
+ #    MaxPingTime
+diff --git a/server/logs/README.txt b/server/logs/README.txt
+new file mode 100644
+index 0000000..6c4e981
+--- /dev/null
++++ b/server/logs/README.txt
+@@ -0,0 +1 @@
++# worldserver / bnetserver write their log files here (LogsDir = "logs")
+diff --git a/server/worldserver.conf b/server/worldserver.conf
+index 1f17ee2..a372dd1 100644
+--- a/server/worldserver.conf
++++ b/server/worldserver.conf
+@@ -94,9 +94,10 @@ DataDir = "./data/"
+ #        Description: Logs directory setting.
+ #        Important:   LogsDir needs to be quoted, as the string might contain space characters.
+ #                     Logs directory must exists, or log file creation will be disabled.
+-#        Default:     "" - (Log files will be stored in the current path)
++#        Default:     "logs" - (log files are stored in the "logs" sub directory,
++#                     the directory is created automatically on startup)
+ 
+-LogsDir = ""
++LogsDir = "logs"
+ 
+ #
+ #    LoginDatabaseInfo
